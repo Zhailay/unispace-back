@@ -1,0 +1,17 @@
+node_modules/
+.env
+*.log
+.DS_Store
+coverage/
+dist/
+build/
+.vscode/
+.idea/
+
+# Загруженные преподавателями RTF и распакованные картинки
+uploads/
+
+# Дампы БД — содержат хеши паролей
+*.dump
+*.sql.gz
+p_lms*.sql
