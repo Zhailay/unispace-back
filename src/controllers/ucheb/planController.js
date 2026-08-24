@@ -46,6 +46,7 @@ class PlanController {
         forma_kontrolya_list,
         disciplina_list: disciplinaResult.rows,
         kurs_label: req.t('plan.kurs')
+        }
       });
     } catch (error) {
       console.error('Staff plan error:', error);

@@ -43,7 +43,9 @@ npm run dev             # http://localhost:4005
 
 | Метод | Путь | Назначение |
 |---|---|---|
-| POST | `/api/auth/login` | вход, тело `{ login, password, userType }` |
+| POST | `/api/auth/login` | вход, тело `{ login, password }`. Бэк сам определяет student/sotrudnik; при совпадении в обеих таблицах отвечает `{ ok:true, needsRoleChoice:true }` |
+| POST | `/api/auth/choose-role` | завершает вход после `needsRoleChoice`, тело `{ role }` |
+| POST | `/api/auth/switch-role` | переключение роли без пароля, только если `user.hasMultipleRoles` |
 | GET | `/api/auth/me` | текущий пользователь по cookie |
 | POST | `/api/auth/logout` | выход |
 | GET | `/api/lang/translations?lang=ru` | словарь переводов |
