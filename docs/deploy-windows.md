@@ -12,7 +12,7 @@
 ```
 Браузер → Apache (домен, :443)
             ├─ /       → unispace-front\dist\   (статика)
-            └─ /api/*  → proxy → 127.0.0.1:4005 (Node под PM2)
+            └─ /api/*  → proxy → 127.0.0.1:4015 (Node под PM2)
                                    └→ PostgreSQL
 ```
 
@@ -42,7 +42,7 @@ npm run build               # -> dist/
 
 ```ini
 NODE_ENV=production
-PORT=4005
+PORT=4015
 
 DB_HOST=localhost
 DB_PORT=5432
@@ -131,7 +131,7 @@ node src\server.js
 | `ECONNREFUSED 127.0.0.1:5432` | PostgreSQL не запущен или другой хост/порт в `.env` |
 | `password authentication failed for user` | неверные `DB_USER`/`DB_PASSWORD` |
 | `relation "session" does not exist` | нет таблицы сессий (SQL в разделе 2) |
-| `EADDRINUSE :::4005` | порт занят: `netstat -ano \| findstr :4005` |
+| `EADDRINUSE :::4015` | порт занят: `netstat -ano \| findstr :4015` |
 | `EPERM` / `EACCES` при записи логов | `mkdir C:\progs\TanymV2\unispace-back\logs` |
 
 После починки процесс нужно пересоздать, а не просто перезапустить —
@@ -206,8 +206,8 @@ nssm start tanym-api
     # Без этого Node считает соединение http:// и secure-cookie не выставится.
     RequestHeader set X-Forwarded-Proto "https"
 
-    ProxyPass        /  http://127.0.0.1:4005/
-    ProxyPassReverse /  http://127.0.0.1:4005/
+    ProxyPass        /  http://127.0.0.1:4015/
+    ProxyPassReverse /  http://127.0.0.1:4015/
 
     ErrorLog  "logs/tanym-error.log"
     CustomLog "logs/tanym-access.log" common
@@ -245,8 +245,8 @@ LoadModule headers_module modules/mod_headers.so
     ProxyPreserveHost On
     RequestHeader set X-Forwarded-Proto "https"
 
-    ProxyPass        /api  http://127.0.0.1:4005/api
-    ProxyPassReverse /api  http://127.0.0.1:4005/api
+    ProxyPass        /api  http://127.0.0.1:4015/api
+    ProxyPassReverse /api  http://127.0.0.1:4015/api
 
     <Directory "C:/progs/tanym/unispace-front/dist">
         Require all granted
@@ -385,8 +385,8 @@ C:\xampp\apache\bin\httpd.exe -S
     ProxyPreserveHost On
     RequestHeader set X-Forwarded-Proto "https"
     # Статику Apache берёт с диска, в Node уходит только /api.
-    ProxyPass        /api  http://127.0.0.1:4005/api
-    ProxyPassReverse /api  http://127.0.0.1:4005/api
+    ProxyPass        /api  http://127.0.0.1:4015/api
+    ProxyPassReverse /api  http://127.0.0.1:4015/api
 
     <Directory "C:/progs/tanym/unispace-front/dist">
         Require all granted
@@ -422,7 +422,7 @@ curl -k -I -H "Host: tanym.zhetysu.edu.kz" https://127.0.0.1/
 
 ```powershell
 # 1. Node поднят
-curl http://127.0.0.1:4005/api/health          # {"ok":true,...}
+curl http://127.0.0.1:4015/api/health          # {"ok":true,...}
 
 # 2. Через Apache
 curl https://tanym.zhetysu.edu.kz/api/health   # тот же ответ
@@ -465,7 +465,7 @@ pm2 restart unispace-back --update-env  # бэк: рестарт процесс�
 | 404 при F5 на `/staff/...` | Нет SPA-fallback в `<Directory>` или не включён `mod_rewrite` |
 | Редирект с `:80` не работает | В блоке `*:80` нет `RewriteEngine On` — в vhost он не наследуется |
 | 502/503 на `/api` | Node не запущен (`pm2 list`) или занят другой порт |
-| **Вместо текста видны ключи** (`common.app_name`, `auth.login_label`) | Словарь не загрузился: `GET /api/lang/translations` не отвечает. Фронт в этом случае показывает сам ключ. Причина всегда в `/api` — начните с `curl.exe -i http://127.0.0.1:4005/api/health` |
+| **Вместо текста видны ключи** (`common.app_name`, `auth.login_label`) | Словарь не загрузился: `GET /api/lang/translations` не отвечает. Фронт в этом случае показывает сам ключ. Причина всегда в `/api` — начните с `curl.exe -i http://127.0.0.1:4015/api/health` |
 | Ошибка CORS в консоли | `CORS_ORIGIN` не совпадает с доменом в адресной строке (протокол и порт тоже считаются) |
 | Старый фронт после деплоя | Не пересобран `dist/` или закеширован `index.html` |
 | Не грузятся шрифты | Сервер без доступа в интернет: Google Fonts недоступен. Текст отрисуется системным шрифтом — см. `index.html` |

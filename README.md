@@ -9,7 +9,7 @@ JSON API образовательной платформы Tanym. Express + Post
 ```bash
 npm install
 cp .env.example .env    # заполнить параметры БД
-npm run dev             # http://localhost:4005
+npm run dev             # http://localhost:4015
 ```
 
 Проверка: `GET /api/health` → `{ "ok": true }`.
