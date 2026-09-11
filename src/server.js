@@ -47,20 +47,39 @@ app.use(helmet({
 
 app.use(compression());
 
-// CORS: фронт живёт на другом origin и шлёт cookie сессии.
+// CORS: фронт может жить на другом origin и шлёт cookie сессии.
 const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
   .split(',')
   .map(o => o.trim())
   .filter(Boolean);
 
-app.use(cors({
-  origin(origin, callback) {
-    // Без Origin — curl, Postman, health-check самого сервера.
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    callback(new Error(`CORS: origin ${origin} не разрешён`));
-  },
-  credentials: true,
+/*
+ * Делегат, а не статический список: нужен доступ к req, чтобы сравнить
+ * Origin с адресом самого запроса.
+ *
+ * Зачем: когда Apache проксирует /api на этот процесс, фронт и API живут
+ * на ОДНОМ origin, и никакого CORS тут нет. Но браузер всё равно шлёт
+ * заголовок Origin на POST (на GET — не шлёт). Раньше это приводило к
+ * тому, что переводы (GET) грузились, а вход (POST) падал с «origin не
+ * разрешён», пока в CORS_ORIGIN не впишут домен вручную.
+ *
+ * Свой собственный origin разрешаем всегда: браузер такие запросы и так
+ * выполняет без CORS, запрещать их нечего.
+ */
+app.use(cors((req, callback) => {
+  const origin = req.headers.origin;
+
+  // Без Origin — curl, Postman, health-check самого сервера.
+  if (!origin) return callback(null, { origin: true, credentials: true });
+
+  // req.protocol учитывает X-Forwarded-Proto (включён trust proxy).
+  const selfOrigin = `${req.protocol}://${req.get('host')}`;
+
+  if (origin === selfOrigin || allowedOrigins.includes(origin)) {
+    return callback(null, { origin: true, credentials: true });
+  }
+
+  callback(new Error(`CORS: origin ${origin} не разрешён`));
 }));
 
 app.use(express.json({ limit: '10mb' }));

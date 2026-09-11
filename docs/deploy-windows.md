@@ -309,6 +309,85 @@ Include conf/extra/httpd-vhosts.conf
 При возврате на HTTPS вернуть `true`/`https` и выполнить
 `pm2 restart unispace-back --update-env`.
 
+### CORS-ошибка с «redirected from» и портом в адресе
+
+```
+Access to fetch at 'https://tanym.zhetysu.edu.kz:4000/api/auth/me'
+(redirected from 'https://tanym.zhetysu.edu.kz/api/auth/me')
+blocked by CORS policy
+```
+
+Origin — это **схема + хост + порт**. `…edu.kz` и `…edu.kz:4000` — разные
+origin, поэтому браузер требует CORS-заголовки и блокирует запрос.
+
+Причина: в vhost стоит **редирект вместо прокси**. Разница принципиальная:
+
+| | Что делает | Видит ли браузер |
+|---|---|---|
+| `ProxyPass` / `RewriteRule [P]` | Apache сам ходит на бэк и отдаёт ответ | нет, origin один |
+| `Redirect` / `RewriteRule [R]` | отдаёт браузеру `302`, тот идёт сам | да, origin меняется → CORS |
+
+Нужен первый вариант. Проверить, что отдаёт сервер:
+
+```powershell
+curl.exe -k -i https://tanym.zhetysu.edu.kz/api/health
+```
+
+Есть `HTTP/1.1 302` и заголовок `Location:` с портом → в конфиге редирект.
+Должно быть сразу `200` и JSON, без `Location`.
+
+Уберите из vhost строки вида
+
+```apache
+Redirect    /api https://tanym.zhetysu.edu.kz:4000/api
+RewriteRule ^/api/(.*)$ https://tanym.zhetysu.edu.kz:4000/api/$1 [R,L]
+```
+
+и оставьте только:
+
+```apache
+ProxyPass        /api  http://127.0.0.1:4015/api
+ProxyPassReverse /api  http://127.0.0.1:4015/api
+```
+
+Цель прокси — всегда `http://127.0.0.1:<порт>`, а не публичный домен:
+запрос не должен выходить наружу и возвращаться.
+
+> **Не «чините» это добавлением `:4000` в `CORS_ORIGIN`.** Симптом уйдёт,
+> но появятся новые: cookie сессии при разных origin потребует
+> `SameSite=None` (а значит HTTPS на обоих портах), и порт Node окажется
+> открыт наружу. Правильно — убрать редирект, чтобы всё осталось
+> на одном origin.
+
+**Если в конфиге редиректа нет, а браузер всё равно редиректит** — скорее
+всего это **закешированный `301`**. `Redirect permanent` и `RewriteRule [R=301]`
+браузер запоминает и повторяет, не спрашивая сервер: конфиг уже починен,
+а Chrome продолжает уводить на старый адрес.
+
+Разделить эти два случая:
+
+```powershell
+curl.exe -k -i https://tanym.zhetysu.edu.kz/api/health
+```
+
+`curl` кеш не использует. Вернулся `200` + JSON, а браузер всё равно
+редиректит — виноват кеш: проверяйте в приватном окне либо в DevTools
+на вкладке Network включите «Disable cache» и перезагрузите.
+
+Найти живой редирект в любом из конфигов Apache:
+
+```cmd
+findstr /S /I "4000" C:\xampp\apache\conf\*.conf
+findstr /S /I "4000" C:\xampp\apache\conf\extra\*.conf
+```
+
+И не забыть, что без перезапуска Apache правки не применяются:
+
+```powershell
+C:\xampp\apache\bin\httpd.exe -t
+C:\xampp\apache\bin\httpd.exe -k restart
+```
+
 ### Открывается ЧУЖОЙ сайт (другой vhost) вместо нового
 
 Самая частая проблема на сервере, где уже крутятся другие сайты.
@@ -467,5 +546,7 @@ pm2 restart unispace-back --update-env  # бэк: рестарт процесс�
 | 502/503 на `/api` | Node не запущен (`pm2 list`) или занят другой порт |
 | **Вместо текста видны ключи** (`common.app_name`, `auth.login_label`) | Словарь не загрузился: `GET /api/lang/translations` не отвечает. Фронт в этом случае показывает сам ключ. Причина всегда в `/api` — начните с `curl.exe -i http://127.0.0.1:4015/api/health` |
 | Ошибка CORS в консоли | `CORS_ORIGIN` не совпадает с доменом в адресной строке (протокол и порт тоже считаются) |
+| **Переводы грузятся, а вход даёт «origin не разрешён»** | Браузер шлёт `Origin` на POST, но не на GET — поэтому GET проходил, а POST нет. Впишите домен в `CORS_ORIGIN` и `pm2 restart unispace-back --update-env`. В свежем коде свой собственный origin разрешается автоматически |
+| **CORS + `(redirected from ...)` с портом в адресе** | В vhost редирект вместо прокси — см. раздел ниже. Порт входит в origin, поэтому `:4000` это уже чужой origin |
 | Старый фронт после деплоя | Не пересобран `dist/` или закеширован `index.html` |
 | Не грузятся шрифты | Сервер без доступа в интернет: Google Fonts недоступен. Текст отрисуется системным шрифтом — см. `index.html` |
