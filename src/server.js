@@ -71,6 +71,31 @@ app.use(cookieParser());
 const SESSION_MAX_AGE = parseInt(process.env.SESSION_MAX_AGE, 10) || 30 * 60 * 1000;
 const isProduction = process.env.NODE_ENV === 'production';
 
+/*
+ * Параметры cookie сессии задаются явно, а не выводятся из NODE_ENV.
+ *
+ * Раньше здесь было sameSite:'none' + secure:true на любом проде. Но
+ * SameSite=None браузер принимает ТОЛЬКО вместе с Secure, а Secure-cookie
+ * ходит только по HTTPS. На сервере без сертификата это давало «вход прошёл,
+ * а дальше везде 401»: cookie молча выбрасывалась браузером.
+ *
+ * При раздаче фронта и API с одного домена (Apache/IIS проксирует /api на
+ * этот процесс) кросс-доменных cookie не нужно вовсе — достаточно lax,
+ * который работает и по HTTP. Поэтому по умолчанию lax + без Secure:
+ *   COOKIE_SAMESITE=none  — только если фронт на ОТДЕЛЬНОМ домене (требует HTTPS)
+ *   COOKIE_SECURE=true    — когда сайт открыт по HTTPS
+ */
+const cookieSameSite = (process.env.COOKIE_SAMESITE || 'lax').toLowerCase();
+// SameSite=None без Secure невалиден — форсируем, иначе cookie не установится.
+const cookieSecure = process.env.COOKIE_SECURE === 'true' || cookieSameSite === 'none';
+
+if (isProduction && !cookieSecure) {
+  console.warn(
+    '[session] cookie без Secure: это нормально для HTTP за прокси на одном домене.\n' +
+    '          После включения HTTPS выставьте COOKIE_SECURE=true.'
+  );
+}
+
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),
   secret: process.env.SESSION_SECRET || 'change-this-secret-in-production',
@@ -80,9 +105,8 @@ app.use(session({
   cookie: {
     maxAge: SESSION_MAX_AGE,
     httpOnly: true,
-    // Кросс-доменный фронт в проде требует SameSite=None, а он работает только с Secure.
-    sameSite: isProduction ? 'none' : 'lax',
-    secure: isProduction,
+    sameSite: cookieSameSite,
+    secure: cookieSecure,
   },
 }));
 
