@@ -10,10 +10,10 @@
 Итого под PM2 живёт один процесс — `unispace-back`. Фронт раздаёт Apache.
 
 ```
-Браузер → Apache (домен, :80/:443)
-            ├─ /            → C:\www\tanym\dist\   (статика, отдаёт Apache)
-            └─ /api/*       → proxy → 127.0.0.1:4005 (Node под PM2)
-                                        └→ PostgreSQL
+Браузер → Apache (домен, :443)
+            ├─ /       → unispace-front\dist\   (статика)
+            └─ /api/*  → proxy → 127.0.0.1:4005 (Node под PM2)
+                                   └→ PostgreSQL
 ```
 
 Фронт и API оказываются на **одном домене** — это важно: cookie сессии
@@ -25,12 +25,12 @@
 
 ```powershell
 # Бэкенд
-cd C:\www\tanym\unispace-back
+cd C:\progs\tanym\unispace-back
 npm ci --omit=dev
 copy .env.example .env      # заполнить, см. раздел 2
 
 # Фронт — собрать один раз, процесс не нужен
-cd C:\www\tanym\unispace-front
+cd C:\progs\tanym\unispace-front
 npm ci
 npm run build               # -> dist/
 ```
@@ -53,12 +53,13 @@ DB_PASSWORD=<пароль>
 SESSION_SECRET=<длинная случайная строка>
 SESSION_MAX_AGE=86400000
 
-# Фронт и API на одном домене -> lax. По HTTPS переключить COOKIE_SECURE=true.
+# Фронт и API на одном домене -> lax (кросс-доменных cookie не нужно).
 COOKIE_SAMESITE=lax
-COOKIE_SECURE=false
+# Сайт открывается по https:// -> true. Для http-стенда поставить false.
+COOKIE_SECURE=true
 
-# Тот же домен, что в браузере. Без завершающего слэша.
-CORS_ORIGIN=http://tanym.example.kz
+# Тот же домен, что в адресной строке. Схема и порт тоже считаются.
+CORS_ORIGIN=https://tanym.zhetysu.edu.kz
 
 DEFAULT_LANGUAGE=ru
 SUPPORTED_LANGUAGES=ru,kk,en
@@ -67,11 +68,22 @@ SOFFICE_PATH=C:/Program Files/LibreOffice/program/soffice.exe
 ```
 
 > **Про cookie — самая частая причина «вход не работает».**
+>
 > `SameSite=None` браузер принимает только вместе с `Secure`, а `Secure`-cookie
-> передаётся только по HTTPS. На домене без сертификата это выглядит так:
-> логин отвечает 200, но каждый следующий запрос — 401, потому что браузер
-> молча выбросил cookie. При раздаче с одного домена ставьте `lax`.
-> После подключения HTTPS: `COOKIE_SECURE=true` (`COOKIE_SAMESITE` оставить `lax`).
+> передаётся только по HTTPS. Раньше в коде на любом `NODE_ENV=production`
+> жёстко ставилось `none` + `secure` — на HTTP-домене это давало «логин
+> отвечает 200, а дальше везде 401»: браузер молча выбрасывал cookie.
+> Теперь флаги задаются здесь.
+>
+> Правило простое:
+> - фронт и API на одном домене (оба варианта vhost ниже) → `COOKIE_SAMESITE=lax`;
+> - сайт по `https://` → `COOKIE_SECURE=true`, по `http://` → `false`;
+> - `none` нужен **только** если фронт вынесен на отдельный домен, и он
+>   обязательно требует HTTPS.
+>
+> При `COOKIE_SECURE=true` в vhost обязателен
+> `RequestHeader set X-Forwarded-Proto "https"` — иначе Node считает
+> соединение незащищённым и не выставит cookie (`trust proxy` уже включён).
 
 Таблица `session` должна существовать в БД (`connect-pg-simple`):
 
@@ -89,12 +101,47 @@ CREATE INDEX IF NOT EXISTS IDX_session_expire ON session (expire);
 ```powershell
 npm install -g pm2
 
-cd C:\www\tanym\unispace-back
+cd C:\progs\tanym\unispace-back
 pm2 start ecosystem.config.js --env production
 pm2 save
 
 pm2 list
 pm2 logs unispace-back
+```
+
+### Процесс падает сразу после `pm2 start`
+
+Признак в `pm2 list`: `status = errored`, счётчик рестартов растёт,
+`memory = 0b`. После `max_restarts` (10) PM2 перестаёт поднимать процесс.
+
+PM2 при быстром падении глотает вывод, поэтому **сначала запустите напрямую** —
+ошибка напечатается в консоль:
+
+```powershell
+cd C:\progs\TanymV2\unispace-back
+node src\server.js
+```
+
+Либо из PM2: `pm2 logs unispace-back --lines 100 --nostream`.
+
+| Текст ошибки | Причина |
+|---|---|
+| `Cannot find module 'express'` | не установлены зависимости → `npm ci --omit=dev` |
+| `client password must be a string`, `SASL: SCRAM-SERVER-FIRST-MESSAGE` | **нет файла `.env`** — `DB_PASSWORD` не подхватился. Самая частая причина |
+| `ECONNREFUSED 127.0.0.1:5432` | PostgreSQL не запущен или другой хост/порт в `.env` |
+| `password authentication failed for user` | неверные `DB_USER`/`DB_PASSWORD` |
+| `relation "session" does not exist` | нет таблицы сессий (SQL в разделе 2) |
+| `EADDRINUSE :::4005` | порт занят: `netstat -ano \| findstr :4005` |
+| `EPERM` / `EACCES` при записи логов | `mkdir C:\progs\TanymV2\unispace-back\logs` |
+
+После починки процесс нужно пересоздать, а не просто перезапустить —
+`errored`-запись хранит старую конфигурацию:
+
+```powershell
+pm2 delete unispace-back
+pm2 start ecosystem.config.js --env production
+pm2 save
+pm2 list          # ожидаем status=online, restarts=0
 ```
 
 ### Автозапуск при перезагрузке сервера
@@ -115,8 +162,8 @@ npm run setup
 **Вариант Б — NSSM.** Обернуть в службу вручную:
 
 ```powershell
-nssm install tanym-api "C:\Program Files\nodejs\node.exe" "C:\www\tanym\unispace-back\src\server.js"
-nssm set tanym-api AppDirectory "C:\www\tanym\unispace-back"
+nssm install tanym-api "C:\Program Files\nodejs\node.exe" "C:\progs\tanym\unispace-back\src\server.js"
+nssm set tanym-api AppDirectory "C:\progs\tanym\unispace-back"
 nssm set tanym-api AppEnvironmentExtra NODE_ENV=production
 nssm start tanym-api
 ```
@@ -124,7 +171,53 @@ nssm start tanym-api
 При варианте Б PM2 не нужен вовсе — служба Windows сама перезапускает процесс.
 Для одного Node-процесса это часто проще, чем PM2 + обвязка.
 
-## 4. Apache (XAMPP)
+## 4. Apache (XAMPP) — два варианта vhost
+
+### Чем это отличается от Next.js
+
+В Next.js-приложении (`next-cms`) проксируется **всё** `/` на `127.0.0.1:3001`,
+потому что Next.js — это сервер: он рендерит страницы на каждый запрос.
+
+Здесь фронт — статические файлы. Сервер ему не нужен. Отсюда два варианта:
+
+| | Вариант А | Вариант Б |
+|---|---|---|
+| Статику отдаёт | Apache с диска | Node (`express.static`) |
+| vhost | `DocumentRoot` + proxy только `/api` | proxy всего `/` — как у Next.js |
+| Нужен `mod_rewrite` | да (SPA-fallback) | нет |
+| Скорость статики | выше | достаточная |
+
+**Вариант Б проще** и по форме совпадает с тем, что у вас уже работает:
+`server.js` сам раздаёт `dist/` и делает SPA-fallback, так что достаточно
+одной строки `ProxyPass /`. Начните с него; на А можно перейти позже,
+если захочется снять раздачу статики с Node.
+
+### Вариант Б — проксировать всё на Node (как в next-cms)
+
+```apache
+<VirtualHost *:443>
+    ServerName tanym.zhetysu.edu.kz
+    SSLEngine on
+    SSLCertificateFile    "conf/ssl/_zhetysu_edu_kz.crt"
+    SSLCertificateKeyFile "conf/ssl/zhetysu.edu.kz-private.key"
+    SSLCACertificateFile  "${SRVROOT}/conf/ssl/_zhetysu_edu_kz.ca"
+
+    ProxyPreserveHost On
+    # Без этого Node считает соединение http:// и secure-cookie не выставится.
+    RequestHeader set X-Forwarded-Proto "https"
+
+    ProxyPass        /  http://127.0.0.1:4005/
+    ProxyPassReverse /  http://127.0.0.1:4005/
+
+    ErrorLog  "logs/tanym-error.log"
+    CustomLog "logs/tanym-access.log" common
+</VirtualHost>
+```
+
+Требует, чтобы `dist/` лежал там, где его ищет `server.js`
+(`../unispace-front/dist` относительно бэка, либо явный `STATIC_DIR` в `.env`).
+
+### Вариант А — статику отдаёт Apache
 
 Включить модули в `C:\xampp\apache\conf\httpd.conf` — снять `#`:
 
@@ -135,23 +228,27 @@ LoadModule rewrite_module modules/mod_rewrite.so
 LoadModule headers_module modules/mod_headers.so
 ```
 
-Виртуальный хост в `C:\xampp\apache\conf\extra\httpd-vhosts.conf`:
-
 ```apache
-<VirtualHost *:80>
-    ServerName tanym.example.kz
-    DocumentRoot "C:/www/tanym/unispace-front/dist"
+<VirtualHost *:443>
+    ServerName tanym.zhetysu.edu.kz
+    SSLEngine on
+    SSLCertificateFile    "conf/ssl/_zhetysu_edu_kz.crt"
+    SSLCertificateKeyFile "conf/ssl/zhetysu.edu.kz-private.key"
+    SSLCACertificateFile  "${SRVROOT}/conf/ssl/_zhetysu_edu_kz.ca"
 
-    # --- API: всё под /api уходит в Node ---
+    # ВАЖНО: этот путь и путь в <Directory> ниже должны совпадать ДОСЛОВНО
+    # (включая регистр). Если они разные, у DocumentRoot не окажется
+    # "Require all granted" и Apache отдаст 403 Forbidden.
+    DocumentRoot "C:/progs/tanym/unispace-front/dist"
+
+    # --- API: только /api уходит в Node, остальное Apache берёт с диска ---
     ProxyPreserveHost On
+    RequestHeader set X-Forwarded-Proto "https"
+
     ProxyPass        /api  http://127.0.0.1:4005/api
     ProxyPassReverse /api  http://127.0.0.1:4005/api
 
-    # Node доверяет X-Forwarded-* (app.set('trust proxy', 1)),
-    # без них req.protocol и secure-cookie определяются неверно.
-    RequestHeader set X-Forwarded-Proto "http"
-
-    <Directory "C:/www/tanym/unispace-front/dist">
+    <Directory "C:/progs/tanym/unispace-front/dist">
         Require all granted
         AllowOverride None
 
@@ -178,17 +275,148 @@ LoadModule headers_module modules/mod_headers.so
 </VirtualHost>
 ```
 
+### Редирект с HTTP на HTTPS
+
+```apache
+<VirtualHost *:80>
+    ServerName tanym.zhetysu.edu.kz
+    Redirect permanent / https://tanym.zhetysu.edu.kz/
+</VirtualHost>
+```
+
+Если вместо `Redirect` используете `RewriteRule`, не забудьте `RewriteEngine On`
+внутри блока — в vhost он **не наследуется**, и без него правило молча
+не сработает:
+
+```apache
+<VirtualHost *:80>
+    ServerName tanym.zhetysu.edu.kz
+    RewriteEngine On
+    RewriteRule ^(.*) https://%{SERVER_NAME}$1 [R=301,L]
+</VirtualHost>
+```
+
 Подключить файл vhosts, если ещё не подключён (`httpd.conf`):
 
 ```apache
 Include conf/extra/httpd-vhosts.conf
 ```
 
-### Если позже появится HTTPS
+### Если разворачиваете на HTTP (стенд без сертификата)
 
-1. В vhost `*:443` добавить сертификат, `RequestHeader set X-Forwarded-Proto "https"`.
-2. В `.env`: `COOKIE_SECURE=true`, `CORS_ORIGIN=https://tanym.example.kz`.
-3. `pm2 restart unispace-back --update-env`.
+В `.env` поставить `COOKIE_SECURE=false` и `CORS_ORIGIN=http://...`,
+в vhost — `RequestHeader set X-Forwarded-Proto "http"`.
+При возврате на HTTPS вернуть `true`/`https` и выполнить
+`pm2 restart unispace-back --update-env`.
+
+### Открывается ЧУЖОЙ сайт (другой vhost) вместо нового
+
+Самая частая проблема на сервере, где уже крутятся другие сайты.
+
+Apache выбирает `<VirtualHost>` по заголовку `Host`. Если **ни один**
+`ServerName`/`ServerAlias` не совпал с доменом из адресной строки, Apache
+молча берёт **первый по порядку** vhost для этого порта. На вашем сервере
+первый `*:443` — это `site.zhetysu.edu.kz`, поэтому туда и попадаете
+(а его приложение может ещё и сделать свой редирект на канонический адрес —
+отсюда ощущение «редиректит»).
+
+**Сначала посмотрите, что Apache реально загрузил:**
+
+```powershell
+C:\xampp\apache\bin\httpd.exe -S
+```
+
+```
+*:443  is a NameVirtualHost
+       default server site.zhetysu.edu.kz (conf/extra/httpd-vhosts.conf:10)
+       port 443 namevhost site.zhetysu.edu.kz  (conf/extra/httpd-vhosts.conf:10)
+       port 443 namevhost tanym.zhetysu.edu.kz (conf/extra/httpd-vhosts.conf:35)
+```
+
+Нет строки `namevhost tanym.zhetysu.edu.kz` → Apache ваш блок не видит.
+Дальше по списку:
+
+1. **Порт.** Вы открываете `http://` или `https://`? vhost для `*:443`
+   не обслуживает `:80`. Если для `:80` вашего блока нет — сработает первый
+   `:80`-vhost, то есть чужой. Нужны **оба** блока (см. «Редирект с HTTP на HTTPS»).
+
+2. **`ServerName` посимвольно равен домену в адресной строке.**
+   `tanym.zhetysu.edu.kz` и `www.tanym.zhetysu.edu.kz` — разные имена.
+   Второе добавляется через `ServerAlias`.
+
+3. **Файл с vhost подключён** в `httpd.conf`
+   (`Include conf/extra/httpd-vhosts.conf`), и блок дописан именно в него.
+
+4. **Синтаксис.** `httpd.exe -t` — при ошибке Apache работает на старом
+   конфиге, и правки просто не применяются.
+
+5. **Apache перезапущен** после правки: `httpd.exe -k restart`
+   (Reload в XAMPP Control Panel тоже подойдёт).
+
+6. **DNS.** `nslookup tanym.zhetysu.edu.kz` должен вернуть IP этого сервера.
+   Пока запись не появилась, можно проверить через `hosts`:
+   `C:\Windows\System32\drivers\etc\hosts` → `127.0.0.1 tanym.zhetysu.edu.kz`.
+
+7. **Сертификат должен покрывать поддомен.** Если `_zhetysu_edu_kz.crt`
+   выписан на `*.zhetysu.edu.kz` — `tanym.zhetysu.edu.kz` подходит.
+   Если это сертификат только на `site.zhetysu.edu.kz`, браузер выдаст
+   предупреждение, но vhost всё равно должен выбираться правильно.
+
+**Готовая пара блоков** (оба порта, с алиасом):
+
+```apache
+<VirtualHost *:80>
+    ServerName  tanym.zhetysu.edu.kz
+    ServerAlias www.tanym.zhetysu.edu.kz
+    Redirect permanent / https://tanym.zhetysu.edu.kz/
+</VirtualHost>
+
+<VirtualHost *:443>
+    ServerName  tanym.zhetysu.edu.kz
+    ServerAlias www.tanym.zhetysu.edu.kz
+
+    SSLEngine on
+    SSLCertificateFile    "conf/ssl/_zhetysu_edu_kz.crt"
+    SSLCertificateKeyFile "conf/ssl/zhetysu.edu.kz-private.key"
+    SSLCACertificateFile  "${SRVROOT}/conf/ssl/_zhetysu_edu_kz.ca"
+
+    DocumentRoot "C:/progs/tanym/unispace-front/dist"
+
+    ProxyPreserveHost On
+    RequestHeader set X-Forwarded-Proto "https"
+    # Статику Apache берёт с диска, в Node уходит только /api.
+    ProxyPass        /api  http://127.0.0.1:4005/api
+    ProxyPassReverse /api  http://127.0.0.1:4005/api
+
+    <Directory "C:/progs/tanym/unispace-front/dist">
+        Require all granted
+        AllowOverride None
+        RewriteEngine On
+        RewriteCond %{REQUEST_URI} !^/api
+        RewriteCond %{REQUEST_FILENAME} !-f
+        RewriteCond %{REQUEST_FILENAME} !-d
+        RewriteRule . /index.html [L]
+    </Directory>
+
+    ErrorLog  "logs/tanym-error.log"
+    CustomLog "logs/tanym-access.log" common
+</VirtualHost>
+```
+
+**Проверка мимо DNS и браузерного кеша** — обращаемся по IP, но с нужным
+`Host`, так что подмешивается ровно тот vhost, который нас интересует:
+
+```powershell
+curl -k -I -H "Host: tanym.zhetysu.edu.kz" https://127.0.0.1/
+```
+
+Вернулся ваш `index.html` (200, `text/html`) — vhost работает, проблема в DNS
+или в кеше браузера. Вернулся редирект на `site.zhetysu.edu.kz` — Apache
+по-прежнему не сопоставляет имя, возвращайтесь к пункту 1.
+
+> Браузер агрессивно кеширует `301 Redirect permanent`. Если один раз
+> прилетел редирект на чужой домен, он будет повторяться и после починки
+> конфига — проверяйте в приватном окне.
 
 ## 5. Проверка
 
@@ -197,26 +425,29 @@ Include conf/extra/httpd-vhosts.conf
 curl http://127.0.0.1:4005/api/health          # {"ok":true,...}
 
 # 2. Через Apache
-curl http://tanym.example.kz/api/health        # тот же ответ
+curl https://tanym.zhetysu.edu.kz/api/health   # тот же ответ
 
-# 3. Cookie выставляется без Secure (иначе вход не заработает по HTTP)
-curl -i -X POST http://tanym.example.kz/api/lang ^
+# 3. Cookie сессии вообще выставляется — без неё вход не работает
+curl -i -X POST https://tanym.zhetysu.edu.kz/api/lang ^
   -H "Content-Type: application/json" -d "{\"lang\":\"ru\"}"
-# Ожидаем: Set-Cookie: connect.sid=...; HttpOnly; SameSite=Lax
-# Если видите "SameSite=None; Secure" по HTTP — вход работать не будет,
-# проверьте COOKIE_SAMESITE в .env.
+# По HTTPS ожидаем: Set-Cookie: connect.sid=...; HttpOnly; Secure; SameSite=Lax
+# По HTTP  ожидаем: Set-Cookie: connect.sid=...; HttpOnly; SameSite=Lax
+#
+# Заголовка Set-Cookie НЕТ вообще -> Node считает соединение незащищённым
+# при COOKIE_SECURE=true. Проверьте RequestHeader X-Forwarded-Proto в vhost.
+# Видите SameSite=None -> уберите COOKIE_SAMESITE=none из .env.
 
 # 4. SPA-роут открывается напрямую
-curl -I http://tanym.example.kz/staff/jurnal   # 200 и text/html, не 404
+curl -I https://tanym.zhetysu.edu.kz/staff/jurnal   # 200 и text/html, не 404
 ```
 
 ## 6. Обновление
 
 ```powershell
-cd C:\www\tanym\unispace-front
+cd C:\progs\tanym\unispace-front
 git pull && npm ci && npm run build     # фронт: только пересборка
 
-cd C:\www\tanym\unispace-back
+cd C:\progs\tanym\unispace-back
 git pull && npm ci --omit=dev
 pm2 restart unispace-back --update-env  # бэк: рестарт процесса
 ```
@@ -228,9 +459,13 @@ pm2 restart unispace-back --update-env  # бэк: рестарт процесс�
 
 | Симптом | Причина |
 |---|---|
+| **403 Forbidden на всём сайте** | Пути в `DocumentRoot` и `<Directory>` не совпадают, поэтому у корня нет `Require all granted`. В Apache 2.4 глобально действует `Require all denied`. Сверьте обе строки посимвольно; в `logs/tanym-error.log` будет `client denied by server configuration` |
+| 403 и пути совпадают | Папки `dist/` нет (фронт не собран) или у службы Apache нет прав на чтение диска `C:\progs\...` |
 | Вход 200, дальше везде 401 | `Secure`-cookie по HTTP. Поставить `COOKIE_SAMESITE=lax`, `COOKIE_SECURE=false` |
 | 404 при F5 на `/staff/...` | Нет SPA-fallback в `<Directory>` или не включён `mod_rewrite` |
+| Редирект с `:80` не работает | В блоке `*:80` нет `RewriteEngine On` — в vhost он не наследуется |
 | 502/503 на `/api` | Node не запущен (`pm2 list`) или занят другой порт |
+| **Вместо текста видны ключи** (`common.app_name`, `auth.login_label`) | Словарь не загрузился: `GET /api/lang/translations` не отвечает. Фронт в этом случае показывает сам ключ. Причина всегда в `/api` — начните с `curl.exe -i http://127.0.0.1:4005/api/health` |
 | Ошибка CORS в консоли | `CORS_ORIGIN` не совпадает с доменом в адресной строке (протокол и порт тоже считаются) |
 | Старый фронт после деплоя | Не пересобран `dist/` или закеширован `index.html` |
 | Не грузятся шрифты | Сервер без доступа в интернет: Google Fonts недоступен. Текст отрисуется системным шрифтом — см. `index.html` |

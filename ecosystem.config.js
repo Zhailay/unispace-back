@@ -46,10 +46,14 @@ module.exports = {
 
       // Логи с временными метками, иначе в проде невозможно сопоставить
       // ошибку с обращением пользователя.
+      //
+      // Пути абсолютные: относительные PM2 разрешает от рабочего каталога,
+      // из которого его запустили, а не от каталога приложения — логи
+      // уезжают в случайное место (или не пишутся вовсе).
       time: true,
       merge_logs: true,
-      out_file: 'logs/out.log',
-      error_file: 'logs/error.log',
+      out_file: require('path').join(__dirname, 'logs', 'out.log'),
+      error_file: require('path').join(__dirname, 'logs', 'error.log'),
 
       // Файлы в проде не меняются — слежение только мешает.
       watch: false,
